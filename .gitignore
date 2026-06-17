@@ -1,0 +1,18 @@
+# Build artifacts
+nozik
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Local data
+*.db
+*.db-journal
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
