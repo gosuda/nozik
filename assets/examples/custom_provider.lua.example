@@ -1,0 +1,30 @@
+-- Example custom AI provider for Nozik's "Others" strategy.
+-- The script must define two globals:
+--   build_request(user_message, emotion) -> {url, method, headers, body}
+--   parse_response(response_body_text)   -> array of {title, artist, album, reason, provider_id, provider_track_id}
+
+function build_request(user_message, emotion)
+    local url = config.defaults.endpoint or "https://api.example.com/v1/chat/completions"
+    local body = string.format(
+        '{"model":"custom-model","messages":[{"role":"user","content":"Recommend songs for: %s"}]}',
+        user_message
+    )
+    return {
+        url = url,
+        method = "POST",
+        headers = {
+            ["Content-Type"] = "application/json",
+            ["Authorization"] = "Bearer " .. config.api_key
+        },
+        body = body
+    }
+end
+
+function parse_response(text)
+    -- For this example, assume the server returns a JSON array directly.
+    -- In a real script you could decode JSON manually or just gmatch.
+    local recs = {}
+    -- Minimal placeholder parser: if text contains JSON array, return dummy fallback.
+    recs[1] = { title = "Custom Song", artist = "Custom Artist", provider_id = "yt-music", provider_track_id = "custom_id" }
+    return recs
+end
