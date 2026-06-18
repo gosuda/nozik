@@ -25,6 +25,11 @@ type AIProviderStrategy interface {
 	RecommendTracks(ctx context.Context, req RecommendationRequest) ([]model.Recommendation, error)
 }
 
+// ModelLister is implemented by strategies that can enumerate available models.
+type ModelLister interface {
+	ListModels(ctx context.Context) ([]model.ModelInfo, error)
+}
+
 // DefaultLimit is used when a request does not specify one.
 const DefaultLimit = 5
 

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Nozik
+Comment=AI Music Agent for Gozik
+Exec=nozik %F
+Icon=nozik
+Type=Application
+Categories=AudioVideo;Audio;GTK;
+MimeType=application/x-nozik-taste;
+Terminal=false

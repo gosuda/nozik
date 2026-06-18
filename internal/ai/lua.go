@@ -12,45 +12,46 @@ import (
 	lua "github.com/yuin/gopher-lua"
 )
 
-// LuauCustomConfig holds a user-defined "Others" provider.
-type LuauCustomConfig struct {
+// LuaCustomConfig holds a user-defined "Others" provider.
+type LuaCustomConfig struct {
 	Name       string            `json:"name"`
 	ScriptPath string            `json:"script_path"`
 	APIKey     string            `json:"api_key,omitempty"`
+	Model      string            `json:"model,omitempty"`
 	Defaults   map[string]string `json:"defaults,omitempty"`
 }
 
-// LuauCustomStrategy runs a user-provided Luau script to call an arbitrary endpoint.
-type LuauCustomStrategy struct {
-	Config LuauCustomConfig
+// LuaCustomStrategy runs a user-provided Lua script to call an arbitrary endpoint.
+type LuaCustomStrategy struct {
+	Config LuaCustomConfig
 	Client *http.Client
 }
 
-// NewLuauCustomStrategy creates a strategy from the supplied config.
-func NewLuauCustomStrategy(cfg LuauCustomConfig) *LuauCustomStrategy {
-	return &LuauCustomStrategy{Config: cfg, Client: http.DefaultClient}
+// NewLuaCustomStrategy creates a strategy from the supplied config.
+func NewLuaCustomStrategy(cfg LuaCustomConfig) *LuaCustomStrategy {
+	return &LuaCustomStrategy{Config: cfg, Client: http.DefaultClient}
 }
 
-func (l *LuauCustomStrategy) Name() string {
+func (l *LuaCustomStrategy) Name() string {
 	if l.Config.Name != "" {
 		return l.Config.Name
 	}
 	return "Others"
 }
 
-func (l *LuauCustomStrategy) RecommendTracks(ctx context.Context, req RecommendationRequest) ([]model.Recommendation, error) {
+func (l *LuaCustomStrategy) RecommendTracks(ctx context.Context, req RecommendationRequest) ([]model.Recommendation, error) {
 	if l.Config.ScriptPath == "" {
-		return nil, fmt.Errorf("no Luau script configured for custom provider")
+		return nil, fmt.Errorf("no Lua script configured for custom provider")
 	}
 	script, err := os.ReadFile(l.Config.ScriptPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading luau script: %w", err)
+		return nil, fmt.Errorf("reading lua script: %w", err)
 	}
 
 	L := lua.NewState()
 	defer L.Close()
 
-	// Expose a synchronous HTTP helper to Luau.
+	// Expose a synchronous HTTP helper to Lua.
 	L.SetGlobal("http_request", L.NewFunction(func(L *lua.LState) int {
 		url := L.CheckString(1)
 		method := strings.ToUpper(L.CheckString(2))
@@ -89,9 +90,10 @@ func (l *LuauCustomStrategy) RecommendTracks(ctx context.Context, req Recommenda
 		return 3
 	}))
 
-	// Provide config defaults and API key as a table.
+	// Provide config defaults, API key, and selected model as a table.
 	cfgTbl := L.NewTable()
 	cfgTbl.RawSetString("api_key", lua.LString(l.Config.APIKey))
+	cfgTbl.RawSetString("model", lua.LString(l.Config.Model))
 	defaults := L.NewTable()
 	for k, v := range l.Config.Defaults {
 		defaults.RawSetString(k, lua.LString(v))
@@ -100,7 +102,7 @@ func (l *LuauCustomStrategy) RecommendTracks(ctx context.Context, req Recommenda
 	L.SetGlobal("config", cfgTbl)
 
 	if err := L.DoString(string(script)); err != nil {
-		return nil, fmt.Errorf("running luau script: %w", err)
+		return nil, fmt.Errorf("running lua script: %w", err)
 	}
 
 	// Call build_request(message, emotion).

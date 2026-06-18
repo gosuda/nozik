@@ -35,7 +35,8 @@ func main() {
 	if err != nil {
 		log.Fatal("create app:", err)
 	}
-	os.Exit(app.Run())
+	code := app.Run()
+	os.Exit(code)
 }
 
 func runMCP() {

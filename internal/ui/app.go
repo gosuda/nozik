@@ -7,18 +7,50 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
+	musicv1 "github.com/gg582/gozik/api/music/v1"
+	playerv1 "github.com/gg582/gozik/api/player/v1"
 	"github.com/gg582/nozik/internal/ai"
 	"github.com/gg582/nozik/internal/config"
 	"github.com/gg582/nozik/internal/curation"
 	"github.com/gg582/nozik/internal/db"
 	"github.com/gg582/nozik/internal/gzk"
 	"github.com/gg582/nozik/internal/model"
-	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gdk"
+	"github.com/gotk3/gotk3/glib"
 	"github.com/gotk3/gotk3/gtk"
 )
+
+const (
+	defaultRecLimit = 3
+	maxRecLimit     = 50
+)
+
+// recCountRe matches phrases like "5개", "3곡", "12 songs", "8 tracks".
+var recCountRe = regexp.MustCompile(`(?i)(\d+)\s*(?:개|곡|songs?|tracks?|pieces?|tunes?)`)
+
+// parseRecommendCount extracts the requested number of recommendations from the
+// user's message. It defaults to defaultRecLimit when no count is found.
+func parseRecommendCount(text string) int {
+	m := recCountRe.FindStringSubmatch(text)
+	if m == nil {
+		return defaultRecLimit
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil || n < 1 {
+		return defaultRecLimit
+	}
+	if n > maxRecLimit {
+		return maxRecLimit
+	}
+	return n
+}
 
 // AssetPath resolves a bundled asset file.
 func AssetPath(name string) string {
@@ -38,20 +70,21 @@ type App struct {
 	db          *db.DB
 	settings    Settings
 	gozik       *gzk.Client
+	gozikMu     sync.Mutex
 
 	// UI widgets
-	chatView        *gtk.TextView
-	chatBuffer      *gtk.TextBuffer
-	entry           *gtk.Entry
-	sendBtn         *gtk.Button
-	recBox          *gtk.Box
-	actionBox       *gtk.Box
-	approveBtn      *gtk.Button
-	modifyBtn       *gtk.Button
-	denyBtn         *gtk.Button
-	songlistBox     *gtk.ListBox
-	songlistScroll  *gtk.ScrolledWindow
-	statusLabel     *gtk.Label
+	chatView       *gtk.TextView
+	chatBuffer     *gtk.TextBuffer
+	entry          *gtk.Entry
+	sendBtn        *gtk.Button
+	recBox         *gtk.Box
+	actionBox      *gtk.Box
+	approveBtn     *gtk.Button
+	modifyBtn      *gtk.Button
+	denyBtn        *gtk.Button
+	songlistBox    *gtk.ListBox
+	songlistScroll *gtk.ScrolledWindow
+	statusLabel    *gtk.Label
 
 	selectedRec *model.Recommendation
 	pendingRecs []model.Recommendation
@@ -59,12 +92,18 @@ type App struct {
 
 // Settings is the persisted UI configuration.
 type Settings struct {
-	Provider   model.ProviderKind  `json:"provider"`
-	GeminiKey  string              `json:"gemini_key,omitempty"`
-	OpenAIKey  string              `json:"openai_key,omitempty"`
-	GrokKey    string              `json:"grok_key,omitempty"`
-	KimiKey    string              `json:"kimi_key,omitempty"`
-	Custom     ai.LuauCustomConfig `json:"custom"`
+	Provider    model.ProviderKind                       `json:"provider"`
+	GeminiKey   string                                   `json:"gemini_key,omitempty"`
+	OpenAIKey   string                                   `json:"openai_key,omitempty"`
+	GrokKey     string                                   `json:"grok_key,omitempty"`
+	KimiKey     string                                   `json:"kimi_key,omitempty"`
+	GeminiModel string                                   `json:"gemini_model,omitempty"`
+	OpenAIModel string                                   `json:"openai_model,omitempty"`
+	GrokModel   string                                   `json:"grok_model,omitempty"`
+	KimiModel   string                                   `json:"kimi_model,omitempty"`
+	KimiBaseURL string                                   `json:"kimi_base_url,omitempty"`
+	ModelsCache map[model.ProviderKind][]model.ModelInfo `json:"models_cache,omitempty"`
+	Custom      ai.LuaCustomConfig                       `json:"custom"`
 }
 
 // NewApp creates the Nozik GTK app.
@@ -79,6 +118,30 @@ func NewApp(database *db.DB) (*App, error) {
 		settings:    Settings{Provider: model.ProviderGemini},
 	}
 	_ = a.loadSettings()
+
+	// Connect to an existing Gozik, or start one in the background so the UI
+	// appears immediately while Gozik is booting.
+	if client, err := gzk.Dial(config.GozikAddr()); err == nil {
+		a.gozik = client
+		log.Printf("Connected to existing Gozik at %s", config.GozikAddr())
+	} else {
+		go func() {
+			a.gozikMu.Lock()
+			defer a.gozikMu.Unlock()
+			if a.gozik != nil {
+				return
+			}
+			gozikCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if client, err := gzk.LaunchAndDial(gozikCtx, config.GozikAddr()); err != nil {
+				log.Printf("Gozik auto-launch failed: %v", err)
+			} else {
+				a.gozik = client
+				log.Printf("Started Gozik at %s", config.GozikAddr())
+			}
+		}()
+	}
+
 	app.Connect("activate", a.onActivate)
 	return a, nil
 }
@@ -99,7 +162,8 @@ func (a *App) onActivate() {
 	}
 	a.window = win
 	win.SetTitle("Nozik")
-	win.SetDefaultSize(900, 760)
+	win.SetDefaultSize(760, 700)
+	win.SetSizeRequest(680, 520)
 	win.SetPosition(gtk.WIN_POS_CENTER)
 
 	if iconPath := AssetPath(filepath.Join("icons", "nozik.png")); fileExists(iconPath) {
@@ -249,70 +313,88 @@ func (a *App) onSend() {
 	a.entry.SetText("")
 	a.appendChat("User", text)
 
+	// Start fresh: clear any previous recommendation / approval state.
+	a.clearRecommendationUI()
+
 	emotion := curation.DetectEmotion(text)
 	mode := curation.ChooseMode(emotion, strings.Contains(strings.ToLower(text), "new") || strings.Contains(strings.ToLower(text), "discover"))
+	limit := parseRecommendCount(text)
 	ctx := context.Background()
-
-	// First try local taste curation for a quick hit.
-	localRecs, err := a.db.Discover(emotion, mode, 3)
-	if err != nil {
-		log.Println("db discover:", err)
-	}
 
 	go func() {
 		strategy := a.strategyForSettings()
-		var aiRecs []model.Recommendation
-		if strategy != nil {
-			history, _ := a.db.RecentPlays(10)
-			req := ai.RecommendationRequest{
-				Message:       text,
-				Emotion:       emotion,
-				RecentHistory: history,
-				DiscoveryMode: mode,
-				Limit:         3,
-				SystemContext: fmt.Sprintf("Current emotion: %s. Discovery mode: %s. Use provider 'yt-music' if possible.", emotion, mode),
-			}
-			recs, err := strategy.RecommendTracks(ctx, req)
-			if err != nil {
-				a.setStatus(fmt.Sprintf("%s error: %v", strategy.Name(), err))
-			} else {
-				aiRecs = recs
-			}
+		if strategy == nil {
+			glib.IdleAdd(func() { a.appendChat("Nozik", "No AI provider configured. Please check settings.") })
+			return
 		}
-		// Combine local taste + AI recommendations; dedupe by title+artist.
-		seen := map[string]bool{}
-		combined := []model.Recommendation{}
-		for _, r := range append(localRecs, aiRecs...) {
-			key := strings.ToLower(r.Title + "|" + r.Artist)
-			if seen[key] || r.Title == "" {
+		req := ai.RecommendationRequest{
+			Message:       text,
+			Emotion:       emotion,
+			DiscoveryMode: mode,
+			Limit:         limit,
+			SystemContext: fmt.Sprintf("Current emotion: %s. Discovery mode: %s. Use provider 'yt-music' if possible. Do NOT use local taste history; rely only on the user's request.", emotion, mode),
+		}
+		recs, err := strategy.RecommendTracks(ctx, req)
+		if err != nil {
+			a.setStatus(fmt.Sprintf("%s error: %v", strategy.Name(), err))
+			glib.IdleAdd(func() { a.appendChat("Nozik", "Sorry, I couldn't generate recommendations right now.") })
+			return
+		}
+		filtered := []model.Recommendation{}
+		for _, r := range recs {
+			if r.Title == "" {
 				continue
 			}
-			seen[key] = true
-			combined = append(combined, r)
+			filtered = append(filtered, r)
+			if len(filtered) >= limit {
+				break
+			}
 		}
-		if len(combined) == 0 {
+		if len(filtered) == 0 {
 			glib.IdleAdd(func() { a.appendChat("Nozik", "I couldn't find any recommendations right now.") })
 			return
 		}
-		glib.IdleAdd(func() { a.showRecommendations(combined) })
+		glib.IdleAdd(func() { a.showRecommendations(filtered) })
 	}()
 }
 
 func (a *App) strategyForSettings() ai.AIProviderStrategy {
 	switch a.settings.Provider {
 	case model.ProviderGemini:
-		return ai.NewGeminiStrategy(a.settings.GeminiKey)
+		return ai.NewGeminiStrategy(a.settings.GeminiKey, a.settings.GeminiModel)
 	case model.ProviderOpenAI:
-		return ai.NewOpenAIStrategy(a.settings.OpenAIKey)
+		return ai.NewOpenAIStrategy(a.settings.OpenAIKey, a.settings.OpenAIModel)
 	case model.ProviderGrok:
-		return ai.NewGrokStrategy(a.settings.GrokKey)
+		return ai.NewGrokStrategy(a.settings.GrokKey, a.settings.GrokModel)
 	case model.ProviderKimi:
-		return ai.NewKimiStrategy(a.settings.KimiKey)
+		return ai.NewKimiStrategy(a.settings.KimiKey, a.settings.KimiModel, a.settings.KimiBaseURL)
 	case model.ProviderOther:
-		return ai.NewLuauCustomStrategy(a.settings.Custom)
+		return ai.NewLuaCustomStrategy(a.settings.Custom)
 	default:
-		return ai.NewGeminiStrategy(a.settings.GeminiKey)
+		return ai.NewGeminiStrategy(a.settings.GeminiKey, a.settings.GeminiModel)
 	}
+}
+
+// clearRecommendationUI removes the current recommendation buttons, clears the
+// internal queue / selection, and hides the approval controls. Call this before
+// starting a new request or after Approve / Deny / Modify to flush stale state.
+func (a *App) clearRecommendationUI() {
+	children := a.recBox.GetChildren()
+	for children.Length() > 0 {
+		a.recBox.Remove(children.NthData(0).(gtk.IWidget))
+		children = a.recBox.GetChildren()
+	}
+	a.pendingRecs = nil
+	a.selectedRec = nil
+
+	songlistChildren := a.songlistBox.GetChildren()
+	for songlistChildren.Length() > 0 {
+		a.songlistBox.Remove(songlistChildren.NthData(0).(gtk.IWidget))
+		songlistChildren = a.songlistBox.GetChildren()
+	}
+
+	a.actionBox.Hide()
+	a.songlistScroll.Hide()
 }
 
 func (a *App) showRecommendations(recs []model.Recommendation) {
@@ -370,67 +452,234 @@ func (a *App) onApprove() {
 	if a.selectedRec == nil {
 		return
 	}
+	rec := *a.selectedRec
+	// Flush the recommendation queue and approval UI as soon as the user acts.
+	a.clearRecommendationUI()
+
 	a.appendChat("MCP", "Searching an Installation...")
 	go func() {
 		ctx := context.Background()
+		a.gozikMu.Lock()
 		if a.gozik == nil {
-			client, err := gzk.Dial(config.GozikAddr())
+			gozikCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			client, err := gzk.LaunchAndDial(gozikCtx, config.GozikAddr())
 			if err != nil {
-				a.setStatus("Gozik not reachable: " + err.Error())
-				glib.IdleAdd(func() { a.appendChat("Nozik", "Could not connect to Gozik. Make sure it is running.") })
+				a.gozikMu.Unlock()
+				a.setStatus("Gozik not reachable and could not be started: " + err.Error())
+				glib.IdleAdd(func() {
+					a.appendChat("Nozik", "Could not connect to or start Gozik. Make sure gozik binary is available or set NOZIK_GOZIK_BIN.")
+				})
 				return
 			}
 			a.gozik = client
 		}
-		rec := a.selectedRec
+		a.gozikMu.Unlock()
+
 		glib.IdleAdd(func() { a.appendChat("Nozik", "Approved. Calling a Gozik Player...") })
-		providerID := rec.ProviderID
-		if providerID == "" {
-			providerID = "yt-music"
-		}
-		if rec.ProviderTrackID != "" {
-			if err := a.gozik.AddProviderTrack(ctx, providerID, rec.ProviderTrackID); err != nil {
-				a.setStatus("AddProviderTrack error: " + err.Error())
+
+		// Verify we are talking to the Gozik PlayerService and discover providers.
+		// Gozik polls for providers in the background, so briefly retry if the list is empty.
+		var providers []*playerv1.ProviderInfo
+		var err error
+		for i := 0; i < 10; i++ {
+			providers, err = a.gozik.ListProviders(ctx)
+			if err != nil {
+				a.setStatus("Gozik PlayerService handshake failed: " + err.Error())
+				glib.IdleAdd(func() {
+					a.appendChat("Nozik", "Could not talk to Gozik PlayerService. Port 50051 is reserved for Gozik; providers now default to 50052.")
+				})
 				return
+			}
+			if len(providers) > 0 {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		if len(providers) == 0 {
+			a.setStatus("No music providers discovered by Gozik")
+			glib.IdleAdd(func() {
+				a.appendChat("Nozik", "Gozik is running but no music provider was found. Start gozik-yt-music or gozik-spotify first, and make sure Gozik was started before the provider.")
+			})
+			return
+		}
+
+		providerID := rec.ProviderID
+		if providerID == "" || providerID == "yt-music" {
+			providerID = providers[0].GetId()
+		}
+
+		if rec.ProviderTrackID != "" {
+			// Verify the stored ID is still playable; if not, fall back to search.
+			if err := a.gozik.ResolveProviderStream(ctx, providerID, rec.ProviderTrackID); err == nil {
+				if err := a.gozik.AddProviderTrack(ctx, providerID, rec.ProviderTrackID); err != nil {
+					a.setStatus("AddProviderTrack error: " + err.Error())
+					return
+				}
+			} else {
+				if err := a.searchAndAddPlayable(ctx, providerID, &rec); err != nil {
+					a.setStatus(err.Error())
+					return
+				}
 			}
 		} else {
-			// Try provider search to resolve a track ID.
-			tracks, err := a.gozik.SearchTracks(ctx, providerID, rec.Title+" "+rec.Artist, 1)
-			if err != nil || len(tracks) == 0 {
-				a.setStatus("Could not resolve track on Gozik")
-				return
-			}
-			if err := a.gozik.AddProviderTrack(ctx, providerID, tracks[0].GetId()); err != nil {
-				a.setStatus("AddProviderTrack error: " + err.Error())
+			if err := a.searchAndAddPlayable(ctx, providerID, &rec); err != nil {
+				a.setStatus(err.Error())
 				return
 			}
 		}
 		_ = a.gozik.Play(ctx)
-		// Record taste.
-		emotion := curation.DetectEmotion("")
-		_ = a.db.RecordPlay(model.PlayRecord{
-			ProviderID:      providerID,
-			ProviderTrackID: rec.ProviderTrackID,
-			Title:           rec.Title,
-			Artist:          rec.Artist,
-			Album:           rec.Album,
-			Emotion:         emotion,
-			Weight:          1.0,
-			PlayCount:       1,
-		})
 		glib.IdleAdd(func() { a.appendChat("Nozik", "Enjoy the music! I will wait for your next request.") })
 	}()
 }
 
+// searchAndAddPlayable searches for rec through Gozik, scores the results like
+// a human would (preferring exact title/artist matches and penalising fan-made,
+// cover, live, remix, loop, etc.), then queues the best playable candidate.
+func (a *App) searchAndAddPlayable(ctx context.Context, providerID string, rec *model.Recommendation) error {
+	tracks, err := a.gozik.SearchTracks(ctx, providerID, rec.Title+" "+rec.Artist, 8)
+	if err != nil {
+		return fmt.Errorf("SearchTracks error: %w", err)
+	}
+	if len(tracks) == 0 {
+		return fmt.Errorf("Could not resolve track on Gozik")
+	}
+
+	scored := make([]scoredTrack, 0, len(tracks))
+	for _, t := range tracks {
+		scored = append(scored, scoredTrack{
+			track: t,
+			score: scoreTrack(rec, t),
+		})
+	}
+	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+
+	for _, st := range scored {
+		if err := a.gozik.ResolveProviderStream(ctx, providerID, st.track.GetId()); err != nil {
+			continue
+		}
+		if err := a.gozik.AddProviderTrack(ctx, providerID, st.track.GetId()); err != nil {
+			return fmt.Errorf("AddProviderTrack error: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("No playable track found on Gozik")
+}
+
+type scoredTrack struct {
+	track *musicv1.Track
+	score float64
+}
+
+// scoreTrack approximates how a human would rank a Gozik search result:
+// exact title/artist matches score highest; fan-made, cover, live, remix,
+// loop and extremely long tracks are penalised.
+func scoreTrack(rec *model.Recommendation, t *musicv1.Track) float64 {
+	score := 0.0
+	recTitle := normalize(rec.Title)
+	recArtist := normalize(rec.Artist)
+	title := normalize(t.GetTitle())
+
+	// Title matching
+	if title == recTitle {
+		score += 100
+	} else if strings.Contains(title, recTitle) {
+		score += 60
+	} else {
+		score += wordOverlapScore(recTitle, title) * 35
+	}
+
+	// Artist matching
+	artistNames := make([]string, 0, len(t.GetArtists()))
+	for _, a := range t.GetArtists() {
+		artistNames = append(artistNames, normalize(a.GetName()))
+	}
+	artistStr := strings.Join(artistNames, " ")
+	if recArtist != "" {
+		if strings.Contains(artistStr, recArtist) {
+			score += 50
+		} else {
+			score += wordOverlapScore(recArtist, artistStr) * 25
+		}
+	}
+
+	titleLower := strings.ToLower(t.GetTitle())
+
+	// Penalise fan-made / cover / live / remix / loop / long compilations.
+	blacklist := []string{
+		"fan made", "fanmade", "cover", "covers", "live", "remix", "bootleg",
+		"instrumental", "karaoke", "8d", "reverb", "slowed", "sped up",
+		"nightcore", "extended", "loop", "1 hour", "10 hours", "lyrics",
+		"traducida", "sub es", "subtitulado", "audio", "mv", "full album",
+	}
+	for _, kw := range blacklist {
+		if strings.Contains(titleLower, kw) {
+			score -= 35
+		}
+	}
+
+	// Reward official-ish channels (e.g. "- Topic", "VEVO", "Official").
+	officialKws := []string{"topic", "vevo", "official"}
+	for _, name := range artistNames {
+		nameLower := strings.ToLower(name)
+		for _, kw := range officialKws {
+			if strings.Contains(nameLower, kw) {
+				score += 25
+			}
+		}
+	}
+
+	// Duration penalties for extremely long tracks (likely loops/compilations).
+	if t.GetDurationMs() > 10*60*1000 {
+		score -= 20
+	}
+	if t.GetDurationMs() > 60*60*1000 {
+		score -= 60
+	}
+
+	return score
+}
+
+// normalize lowercases a string and keeps only letters, digits and spaces.
+func normalize(s string) string {
+	s = strings.ToLower(s)
+	s = strings.ReplaceAll(s, "&", "and")
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == ' ' {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// wordOverlapScore returns the fraction of words in a that also appear in b.
+func wordOverlapScore(a, b string) float64 {
+	wordsA := strings.Fields(a)
+	wordsB := strings.Fields(b)
+	if len(wordsA) == 0 {
+		return 0
+	}
+	setB := make(map[string]struct{}, len(wordsB))
+	for _, w := range wordsB {
+		setB[w] = struct{}{}
+	}
+	matches := 0
+	for _, w := range wordsA {
+		if _, ok := setB[w]; ok {
+			matches++
+		}
+	}
+	return float64(matches) / float64(len(wordsA))
+}
+
 func (a *App) onModify() {
+	a.clearRecommendationUI()
 	a.appendChat("Nozik", "Modify mode: please refine your request and send again.")
-	a.actionBox.Hide()
 }
 
 func (a *App) onDeny() {
-	a.selectedRec = nil
-	a.actionBox.Hide()
-	a.songlistScroll.Hide()
+	a.clearRecommendationUI()
 	a.appendChat("Nozik", "Got it. Let me know if you want something else.")
 }
 

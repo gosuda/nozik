@@ -12,10 +12,10 @@ so external tools can query/curate that taste.
 ## 2. AI Provider Strategy Pattern
 Interface: `internal/ai.AIProviderStrategy`
 - [x] `GeminiStrategy` — Google Generative Language API
-- [x] `KimiStrategy` — Moonshot AI (`api.moonshot.cn`) chat completions
+- [x] `KimiStrategy` — Moonshot AI (`api.moonshot.ai`, override via `MOONSHOT_BASE_URL`) chat completions
 - [x] `OpenAIStrategy` — OpenAI-compatible chat completions (stub/ready)
 - [x] `GrokStrategy` — xAI Grok-compatible chat completions (stub/ready)
-- [x] `LuauCustomStrategy` — "Others" provider: custom endpoint + Luau response parser
+- [x] `LuaCustomStrategy` — "Others" provider: custom endpoint + Lua response parser
 
 ## 3. Database & Curation
 SQLite layer in `internal/db`:
@@ -45,7 +45,7 @@ SQLite layer in `internal/db`:
 - [x] Active songlist view component
 - [x] Settings dashboard:
   - Provider selection (Gemini, ChatGPT, Grok, Kimi, Others)
-  - Custom Luau script / endpoint editor
+  - Custom Lua script / endpoint editor
 
 ## 7. Build & Run
 - [x] `go build ./cmd/nozik` compiles

@@ -54,6 +54,17 @@ func (c *Client) AddProviderTrack(ctx context.Context, providerID, trackID strin
 	return err
 }
 
+// ResolveProviderStream checks whether a provider track can be resolved to a
+// playable stream URL. It is used by Nozik to filter out private, unavailable,
+// or bot-detected tracks before queueing them.
+func (c *Client) ResolveProviderStream(ctx context.Context, providerID, trackID string) error {
+	_, err := c.player.ResolveProviderStream(ctx, &playerv1.ProviderTrackRequest{
+		ProviderId: providerID,
+		TrackId:    trackID,
+	})
+	return err
+}
+
 // AddToQueue adds local file paths to Gozik's queue.
 func (c *Client) AddToQueue(ctx context.Context, paths []string) error {
 	_, err := c.player.AddToQueue(ctx, &playerv1.QueueRequest{Paths: paths})

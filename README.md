@@ -9,7 +9,7 @@ Nozik is a GTK dashboard AI agent that talks to the [Gozik](https://github.com/g
   - Kimi / Moonshot AI (priority)
   - ChatGPT / OpenAI-compatible
   - Grok / xAI-compatible
-  - Others — custom endpoint + Luau response parser
+  - Others — custom endpoint + Lua response parser
 - **Taste database** (SQLite)
   - Records every approved play with emotion tags
   - Import / export JSON
@@ -47,7 +47,8 @@ go build -o nozik ./cmd/nozik
 
 Open the Settings dashboard and paste the API key for your chosen provider.
 Keys are saved in `~/.config/nozik/settings.json`.
-If a key is left blank, Nozik falls back to the matching environment variable:
+If a key is left blank, Nozik falls back to the matching environment variable.
+Use the **Model** dropdown to choose a specific model; click **Refresh models** to fetch the list available for the current API key:
 
 | Provider | Settings field | Env fallback |
 |----------|----------------|--------------|
@@ -55,7 +56,7 @@ If a key is left blank, Nozik falls back to the matching environment variable:
 | ChatGPT  | OpenAI API key | `OPENAI_API_KEY` |
 | Grok     | Grok API key   | `GROK_API_KEY` |
 | Kimi     | Kimi API key   | `KIMI_API_KEY` |
-| Others   | Custom Luau script | — |
+| Others   | Custom Lua script | — |
 
 Gozik gRPC address defaults to `127.0.0.1:50051`. Set `GOZIK_GRPC_ADDR` to override.
 
@@ -72,7 +73,7 @@ nozik/
 ├── internal/mcp       # Stdio MCP server
 ├── internal/model     # Shared types
 ├── internal/ui        # GTK dashboard + settings dialog
-└── assets/            # CSS, inverted icon, example Luau script
+└── assets/            # CSS, inverted icon, example Lua script
 ```
 
 ## Custom Provider Example

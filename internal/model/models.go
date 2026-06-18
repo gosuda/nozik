@@ -23,6 +23,12 @@ const (
 	ModePioneer   DiscoveryMode = "pioneer"
 )
 
+// ModelInfo describes an AI model available for a provider.
+type ModelInfo struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+}
+
 // ProviderKind is a supported AI provider.
 type ProviderKind string
 
