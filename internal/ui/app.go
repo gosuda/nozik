@@ -35,6 +35,35 @@ const (
 // recCountRe matches phrases like "5개", "3곡", "12 songs", "8 tracks".
 var recCountRe = regexp.MustCompile(`(?i)(\d+)\s*(?:개|곡|songs?|tracks?|pieces?|tunes?)`)
 
+// recommendIntent describes what the user wants to do with recommendations.
+type recommendIntent int
+
+const (
+	intentPlay recommendIntent = iota // play the recommended songs
+	intentAdd                         // only add them to the queue
+)
+
+// playIntentRe matches explicit play requests. addIntentRe matches explicit
+// add-to-queue requests. If neither matches, the default is intentAdd so that
+// recommendations do not hijack the current playback.
+var (
+	playIntentRe = regexp.MustCompile(`(?i)(?:틀어|재생|play|플레이|들려|들어|start)`)
+	addIntentRe  = regexp.MustCompile(`(?i)(?:추가해|추가|넣어|넣|add|queue|append|put)`)
+)
+
+// parseRecommendIntent extracts whether the user asked to play or just add.
+func parseRecommendIntent(text string) recommendIntent {
+	// Explicit add takes precedence over generic "recommend" so that queueing
+	// requests never unexpectedly start playback.
+	if addIntentRe.MatchString(text) {
+		return intentAdd
+	}
+	if playIntentRe.MatchString(text) {
+		return intentPlay
+	}
+	return intentAdd
+}
+
 // parseRecommendCount extracts the requested number of recommendations from the
 // user's message. It defaults to defaultRecLimit when no count is found.
 func parseRecommendCount(text string) int {
@@ -82,12 +111,13 @@ type App struct {
 	approveBtn     *gtk.Button
 	modifyBtn      *gtk.Button
 	denyBtn        *gtk.Button
-	songlistBox    *gtk.ListBox
+	songlistBox    *gtk.Grid
 	songlistScroll *gtk.ScrolledWindow
 	statusLabel    *gtk.Label
 
-	selectedRec *model.Recommendation
-	pendingRecs []model.Recommendation
+	pendingRecs     []model.Recommendation
+	recCheckboxes   []*gtk.CheckButton
+	pendingIntent   recommendIntent
 }
 
 // Settings is the persisted UI configuration.
@@ -255,7 +285,14 @@ func (a *App) onActivate() {
 	a.songlistScroll.SetProperty("name", "SonglistScroll")
 	a.songlistScroll.SetNoShowAll(true)
 	a.songlistScroll.Hide()
-	a.songlistBox, _ = gtk.ListBoxNew()
+	a.songlistBox, _ = gtk.GridNew()
+	a.songlistBox.SetColumnSpacing(12)
+	a.songlistBox.SetRowSpacing(4)
+	a.songlistBox.SetMarginStart(8)
+	a.songlistBox.SetMarginEnd(8)
+	a.songlistBox.SetMarginTop(8)
+	a.songlistBox.SetMarginBottom(8)
+	a.songlistBox.SetColumnHomogeneous(false)
 	a.songlistScroll.Add(a.songlistBox)
 	vbox.PackStart(a.songlistScroll, false, false, 0)
 
@@ -319,6 +356,7 @@ func (a *App) onSend() {
 	emotion := curation.DetectEmotion(text)
 	mode := curation.ChooseMode(emotion, strings.Contains(strings.ToLower(text), "new") || strings.Contains(strings.ToLower(text), "discover"))
 	limit := parseRecommendCount(text)
+	a.pendingIntent = parseRecommendIntent(text)
 	ctx := context.Background()
 
 	go func() {
@@ -385,13 +423,15 @@ func (a *App) clearRecommendationUI() {
 		children = a.recBox.GetChildren()
 	}
 	a.pendingRecs = nil
-	a.selectedRec = nil
+	a.recCheckboxes = nil
+	a.pendingIntent = intentAdd
 
 	songlistChildren := a.songlistBox.GetChildren()
 	for songlistChildren.Length() > 0 {
 		a.songlistBox.Remove(songlistChildren.NthData(0).(gtk.IWidget))
 		songlistChildren = a.songlistBox.GetChildren()
 	}
+	a.songlistBox.SetColumnHomogeneous(false)
 
 	a.actionBox.Hide()
 	a.songlistScroll.Hide()
@@ -405,58 +445,188 @@ func (a *App) showRecommendations(recs []model.Recommendation) {
 		children = a.recBox.GetChildren()
 	}
 	a.pendingRecs = recs
-	for i, r := range recs {
-		btn, _ := gtk.ButtonNewWithLabel(fmt.Sprintf("%d. %s - %s", i+1, r.Title, r.Artist))
-		btn.SetTooltipText(r.Reason)
-		btn.SetProperty("name", "BtnOpen")
-		rec := r
-		btn.Connect("clicked", func() { a.onRecommendationClicked(rec) })
-		a.recBox.PackStart(btn, false, false, 0)
-	}
-	a.recBox.ShowAll()
-	a.appendChat("Nozik", "Here are some recommendations. Click one to queue it.")
+	a.recCheckboxes = nil
+
+	a.showRecommendationList(recs)
+	a.appendChat("Nozik", "Here are some recommendations. Check the songs you want, then approve.")
 }
 
-func (a *App) onRecommendationClicked(rec model.Recommendation) {
-	a.selectedRec = &rec
-	a.appendChat("Nozik", fmt.Sprintf("You clicked '%s' by %s.", rec.Title, rec.Artist))
-	a.showSonglist([]model.QueueItem{{
-		ProviderID:      rec.ProviderID,
-		ProviderTrackID: rec.ProviderTrackID,
-		Title:           rec.Title,
-		Artist:          rec.Artist,
-	}})
+// showRecommendationList renders recommendations as a table with columns
+// for #, Title, Artist and a selection checkbox. All items are checked by default.
+//
+// Mouse selection follows the usual modifier rules:
+//   - plain click -> select only that row
+//   - Ctrl/Cmd+click -> toggle that row without affecting other rows
+//   - header checkbox -> select / deselect all rows
+func (a *App) showRecommendationList(recs []model.Recommendation) {
+	grid := a.songlistBox
+
+	// Fixed widths for index/checkbox columns; title/artist columns expand.
+	numWidth := 40
+	chkWidth := 40
+
+	// Header row.
+	headers := []struct {
+		txt  string
+		name string
+	}{
+		{"#", "row-head"},
+		{"Title", "row-head"},
+		{"Artist", "row-head"},
+		{"", "row-head"},
+	}
+	for col, h := range headers {
+		lbl, _ := gtk.LabelNew(h.txt)
+		lbl.SetProperty("name", h.name)
+		lbl.SetHAlign(gtk.ALIGN_START)
+		lbl.SetMarginBottom(4)
+		grid.Attach(lbl, col, 0, 1, 1)
+	}
+
+	selectAllChk, _ := gtk.CheckButtonNew()
+	selectAllChk.SetActive(true)
+	selectAllChk.SetHAlign(gtk.ALIGN_END)
+	selectAllChk.SetTooltipText("Select all")
+	selectAllChk.SetSizeRequest(chkWidth, -1)
+	grid.Attach(selectAllChk, 3, 0, 1, 1)
+
+	var updateHeaderState func()
+	selectAllHandler := selectAllChk.Connect("toggled", func() {
+		active := selectAllChk.GetActive()
+		for _, c := range a.recCheckboxes {
+			c.SetActive(active)
+		}
+	})
+
+	updateHeaderState = func() {
+		active := 0
+		for _, c := range a.recCheckboxes {
+			if c.GetActive() {
+				active++
+			}
+		}
+		selectAllChk.HandlerBlock(selectAllHandler)
+		if active == 0 {
+			selectAllChk.SetInconsistent(false)
+			selectAllChk.SetActive(false)
+		} else if active == len(a.recCheckboxes) {
+			selectAllChk.SetInconsistent(false)
+			selectAllChk.SetActive(true)
+		} else {
+			selectAllChk.SetInconsistent(true)
+		}
+		selectAllChk.HandlerUnblock(selectAllHandler)
+	}
+
+	for i, r := range recs {
+		row := i + 1
+
+		numLbl, _ := gtk.LabelNew(fmt.Sprintf("%d.", i+1))
+		numLbl.SetProperty("name", "row-lead")
+		numLbl.SetSizeRequest(numWidth, -1)
+		numLbl.SetHAlign(gtk.ALIGN_START)
+		numLbl.SetTooltipText(r.Reason)
+
+		titleLbl, _ := gtk.LabelNew(r.Title)
+		titleLbl.SetProperty("name", "row-title")
+		titleLbl.SetHAlign(gtk.ALIGN_START)
+		titleLbl.SetEllipsize(3) // PANGO_ELLIPSIZE_END
+		titleLbl.SetHExpand(true)
+		titleLbl.SetTooltipText(r.Reason)
+
+		artistLbl, _ := gtk.LabelNew(r.Artist)
+		artistLbl.SetProperty("name", "row-artist")
+		artistLbl.SetHAlign(gtk.ALIGN_START)
+		artistLbl.SetEllipsize(3)
+		artistLbl.SetHExpand(true)
+		artistLbl.SetTooltipText(r.Reason)
+
+		chk, _ := gtk.CheckButtonNew()
+		chk.SetActive(true)
+		chk.SetHAlign(gtk.ALIGN_END)
+		chk.SetTooltipText("Include this song")
+		chk.SetSizeRequest(chkWidth, -1)
+
+		grid.Attach(numLbl, 0, row, 1, 1)
+		grid.Attach(titleLbl, 1, row, 1, 1)
+		grid.Attach(artistLbl, 2, row, 1, 1)
+		grid.Attach(chk, 3, row, 1, 1)
+
+		a.recCheckboxes = append(a.recCheckboxes, chk)
+
+		chk.Connect("toggled", updateHeaderState)
+
+		// Row selection with modifier-aware behavior.
+		idx := i
+		rowClickFn := func(event *gdk.Event) bool {
+			ev := gdk.EventButtonNewFromEvent(event)
+			if ev == nil {
+				return false
+			}
+			if isMultiSelectModifier(ev.State()) {
+				// Ctrl/Cmd+click toggles just this row.
+				active := chk.GetActive()
+				chk.SetActive(!active)
+			} else {
+				// Plain click selects only this row.
+				for j, c := range a.recCheckboxes {
+					c.SetActive(j == idx)
+				}
+			}
+			return true
+		}
+		numLbl.Connect("button-press-event", rowClickFn)
+		titleLbl.Connect("button-press-event", rowClickFn)
+		artistLbl.Connect("button-press-event", rowClickFn)
+	}
+
+	grid.ShowAll()
+	a.songlistScroll.SetNoShowAll(false)
+	a.songlistScroll.ShowAll()
+
+	a.approveBtn.SetLabel("Approve Selected")
 	a.actionBox.SetNoShowAll(false)
 	a.actionBox.ShowAll()
 }
 
-func (a *App) showSonglist(items []model.QueueItem) {
-	children := a.songlistBox.GetChildren()
-	for children.Length() > 0 {
-		a.songlistBox.Remove(children.NthData(0).(gtk.IWidget))
-		children = a.songlistBox.GetChildren()
-	}
-	for _, it := range items {
-		row, _ := gtk.ListBoxRowNew()
-		lbl, _ := gtk.LabelNew(fmt.Sprintf("%s - %s", it.Title, it.Artist))
-		lbl.SetHAlign(gtk.ALIGN_START)
-		row.Add(lbl)
-		a.songlistBox.Add(row)
-	}
-	a.songlistBox.ShowAll()
-	a.songlistScroll.SetNoShowAll(false)
-	a.songlistScroll.ShowAll()
+// isMultiSelectModifier reports whether a button-press event state indicates
+// that the user wants additive selection (Ctrl on Linux/Windows, Cmd/Super on macOS).
+func isMultiSelectModifier(state uint) bool {
+	mods := uint(gdk.CONTROL_MASK) |
+		uint(gdk.MOD2_MASK) |
+		uint(gdk.SUPER_MASK) |
+		uint(gdk.META_MASK)
+	return state&mods != 0
 }
 
+
 func (a *App) onApprove() {
-	if a.selectedRec == nil {
+	var targets []model.Recommendation
+	for i, chk := range a.recCheckboxes {
+		if i >= len(a.pendingRecs) {
+			break
+		}
+		if chk.GetActive() {
+			targets = append(targets, a.pendingRecs[i])
+		}
+	}
+	if len(targets) == 0 {
+		a.appendChat("Nozik", "No songs selected. Check at least one song and try again.")
 		return
 	}
-	rec := *a.selectedRec
+
+	intent := a.pendingIntent
+
 	// Flush the recommendation queue and approval UI as soon as the user acts.
 	a.clearRecommendationUI()
 
+	if len(targets) == 1 {
+		a.appendChat("Nozik", fmt.Sprintf("Approved '%s' by %s.", targets[0].Title, targets[0].Artist))
+	} else {
+		a.appendChat("Nozik", fmt.Sprintf("Approved %d songs.", len(targets)))
+	}
 	a.appendChat("MCP", "Searching an Installation...")
+
 	go func() {
 		ctx := context.Background()
 		a.gozikMu.Lock()
@@ -504,52 +674,109 @@ func (a *App) onApprove() {
 			return
 		}
 
-		providerID := rec.ProviderID
-		if providerID == "" || providerID == "yt-music" {
-			providerID = providers[0].GetId()
+		// Remember where the new songs will start in the queue.
+		var startIndex int32
+		if q, err := a.gozik.GetQueue(ctx); err == nil && q != nil {
+			startIndex = int32(len(q.GetTracks()))
 		}
 
-		if rec.ProviderTrackID != "" {
-			// Verify the stored ID is still playable; if not, fall back to search.
-			if err := a.gozik.ResolveProviderStream(ctx, providerID, rec.ProviderTrackID); err == nil {
-				if err := a.gozik.AddProviderTrack(ctx, providerID, rec.ProviderTrackID); err != nil {
-					a.setStatus("AddProviderTrack error: " + err.Error())
-					return
-				}
-			} else {
-				if err := a.searchAndAddPlayable(ctx, providerID, &rec); err != nil {
-					a.setStatus(err.Error())
-					return
-				}
+		added := 0
+		failed := []string{}
+		for _, rec := range targets {
+			providerID := rec.ProviderID
+			if providerID == "" || providerID == "yt-music" {
+				providerID = providers[0].GetId()
 			}
-		} else {
-			if err := a.searchAndAddPlayable(ctx, providerID, &rec); err != nil {
-				a.setStatus(err.Error())
-				return
+
+			if err := a.addTrackWithFallbacks(ctx, providerID, rec); err != nil {
+				log.Printf("Failed to add track %q: %v", rec.Title, err)
+				failed = append(failed, rec.Title)
+				continue
+			}
+			added++
+		}
+
+		// Only start playback when the user explicitly asked to play, and start
+		// from the first newly added track instead of jumping back to the top.
+		if intent == intentPlay && added > 0 {
+			if err := a.gozik.PlayIndex(ctx, startIndex); err != nil {
+				log.Printf("PlayIndex error: %v", err)
+				// Fall back to plain Play if the player doesn't support index selection.
+				_ = a.gozik.Play(ctx)
 			}
 		}
-		_ = a.gozik.Play(ctx)
-		glib.IdleAdd(func() { a.appendChat("Nozik", "Enjoy the music! I will wait for your next request.") })
+
+		if added == 0 {
+			glib.IdleAdd(func() { a.appendChat("Nozik", "Sorry, none of the approved songs could be played right now.") })
+		} else if intent == intentPlay {
+			if len(failed) > 0 {
+				glib.IdleAdd(func() {
+					a.appendChat("Nozik", fmt.Sprintf("Playing from the new songs. Could not resolve: %s.", strings.Join(failed, ", ")))
+				})
+			} else {
+				glib.IdleAdd(func() { a.appendChat("Nozik", "Enjoy the music! I will wait for your next request.") })
+			}
+		} else {
+			if len(failed) > 0 {
+				glib.IdleAdd(func() {
+					a.appendChat("Nozik", fmt.Sprintf("Added %d song(s) to the queue. Could not resolve: %s.", added, strings.Join(failed, ", ")))
+				})
+			} else {
+				glib.IdleAdd(func() { a.appendChat("Nozik", fmt.Sprintf("Added %d song(s) to the queue.", added)) })
+			}
+		}
 	}()
+}
+
+// addTrackWithFallbacks tries multiple strategies to queue a recommendation:
+//  1. Use a stored provider_track_id if it still resolves.
+//  2. Search title + artist and try the best playable match.
+//  3. If that fails, retry the search with just the title, then just the artist.
+//  4. Finally try the original provider_track_id (if any) with the default provider.
+//
+// This prevents one failed resolve from aborting a batch and gives flaky
+// providers / network a few chances to succeed.
+func (a *App) addTrackWithFallbacks(ctx context.Context, providerID string, rec model.Recommendation) error {
+	if rec.ProviderTrackID != "" {
+		if err := a.gozik.ResolveProviderStream(ctx, providerID, rec.ProviderTrackID); err == nil {
+			return a.gozik.AddProviderTrack(ctx, providerID, rec.ProviderTrackID)
+		}
+	}
+
+	queries := []string{
+		rec.Title + " " + rec.Artist,
+		rec.Title,
+	}
+	if rec.Artist != "" {
+		queries = append(queries, rec.Artist+" "+rec.Title)
+	}
+
+	for _, q := range queries {
+		if err := a.searchAndAddPlayable(ctx, providerID, rec, q); err == nil {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("could not resolve track %q on Gozik", rec.Title)
 }
 
 // searchAndAddPlayable searches for rec through Gozik, scores the results like
 // a human would (preferring exact title/artist matches and penalising fan-made,
 // cover, live, remix, loop, etc.), then queues the best playable candidate.
-func (a *App) searchAndAddPlayable(ctx context.Context, providerID string, rec *model.Recommendation) error {
-	tracks, err := a.gozik.SearchTracks(ctx, providerID, rec.Title+" "+rec.Artist, 8)
+func (a *App) searchAndAddPlayable(ctx context.Context, providerID string, rec model.Recommendation, query string) error {
+	tracks, err := a.gozik.SearchTracks(ctx, providerID, query, 8)
 	if err != nil {
 		return fmt.Errorf("SearchTracks error: %w", err)
 	}
 	if len(tracks) == 0 {
-		return fmt.Errorf("Could not resolve track on Gozik")
+		return fmt.Errorf("no search results")
 	}
 
 	scored := make([]scoredTrack, 0, len(tracks))
 	for _, t := range tracks {
 		scored = append(scored, scoredTrack{
 			track: t,
-			score: scoreTrack(rec, t),
+			score: scoreTrack(&rec, t),
 		})
 	}
 	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
@@ -563,7 +790,7 @@ func (a *App) searchAndAddPlayable(ctx context.Context, providerID string, rec *
 		}
 		return nil
 	}
-	return fmt.Errorf("No playable track found on Gozik")
+	return fmt.Errorf("no playable track found")
 }
 
 type scoredTrack struct {

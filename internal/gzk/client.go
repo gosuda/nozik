@@ -77,6 +77,17 @@ func (c *Client) Play(ctx context.Context) error {
 	return err
 }
 
+// PlayIndex starts playback from the track at the given queue index.
+func (c *Client) PlayIndex(ctx context.Context, index int32) error {
+	_, err := c.player.PlayIndex(ctx, &playerv1.PlayIndexRequest{Index: index})
+	return err
+}
+
+// GetQueue returns the current queue and the currently selected index.
+func (c *Client) GetQueue(ctx context.Context) (*playerv1.Queue, error) {
+	return c.player.GetQueue(ctx, &playerv1.Empty{})
+}
+
 // GetStatus returns Gozik's current status.
 func (c *Client) GetStatus(ctx context.Context) (*playerv1.Status, error) {
 	return c.player.GetStatus(ctx, &playerv1.Empty{})
