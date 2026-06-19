@@ -5,10 +5,10 @@ Nozik is a GTK dashboard AI agent that talks to the [Gozik](https://github.com/g
 ## Features
 
 - **AI provider strategy pattern**
-  - Gemini (priority)
-  - Kimi / Moonshot AI (priority)
-  - ChatGPT / OpenAI-compatible
-  - Grok / xAI-compatible
+  - Gemini (Tested, OK)
+  - Kimi / Moonshot AI (WIP)
+  - ChatGPT / OpenAI-compatible(WIP)
+  - Grok / xAI-compatible(Untested, followed official docs)
   - Others — custom endpoint + Lua response parser
 - **Taste database** (SQLite)
   - Records every approved play with emotion tags
