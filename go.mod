@@ -3,6 +3,7 @@ module github.com/gg582/nozik
 go 1.25.6
 
 require (
+	fyne.io/systray v1.12.2
 	github.com/gg582/gozik v0.0.0
 	github.com/gotk3/gotk3 v0.6.5-0.20251124190141-e7a9e823ca35
 	github.com/yuin/gopher-lua v1.1.1
@@ -12,6 +13,7 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

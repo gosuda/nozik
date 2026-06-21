@@ -204,12 +204,23 @@ func (a *App) onActivate() {
 
 	a.applyCSS()
 
+	// Closing the window hides to tray instead of quitting.
+	win.Connect("delete-event", func() bool {
+		a.hideWindow()
+		return true
+	})
+
 	// Header
 	hb, _ := gtk.HeaderBarNew()
 	hb.SetShowCloseButton(true)
 	hb.SetTitle("Nozik")
 	hb.SetSubtitle("Ask Nozik. Then Play Music.")
 	win.SetTitlebar(hb)
+
+	hideBtn, _ := gtk.ButtonNewFromIconName("window-minimize-symbolic", gtk.ICON_SIZE_BUTTON)
+	hideBtn.SetTooltipText("Hide to Tray")
+	hideBtn.Connect("clicked", func() { a.hideWindow() })
+	hb.PackEnd(hideBtn)
 
 	settingsBtn, _ := gtk.ButtonNewFromIconName("emblem-system-symbolic", gtk.ICON_SIZE_BUTTON)
 	settingsBtn.SetTooltipText("Settings")
@@ -303,6 +314,8 @@ func (a *App) onActivate() {
 	vbox.PackStart(a.statusLabel, false, false, 0)
 
 	win.ShowAll()
+
+	a.setupTray()
 }
 
 func (a *App) applyCSS() {
