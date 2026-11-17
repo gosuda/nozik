@@ -75,7 +75,7 @@ Nozik calls Gozik over gRPC (default 127.0.0.1:50051).
 Set GOZIK_GRPC_ADDR to override the target address.
 
 AI providers (paste API key in Settings, or set env fallback):
-  Gemini   Settings / GEMINI_API_KEY
+  Gemini   Settings / GEMINI_API_KEY or GOOGLE_API_KEY
   ChatGPT  Settings / OPENAI_API_KEY
   Grok     Settings / GROK_API_KEY
   Kimi     Settings / KIMI_API_KEY

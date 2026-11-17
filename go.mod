@@ -32,4 +32,4 @@ require (
 	modernc.org/token v1.1.0 // indirect
 )
 
-replace github.com/gg582/gozik => ../gozik
+replace github.com/gg582/gozik => github.com/gosuda/gozik v0.0.0-20261117103359-c58af1e74747

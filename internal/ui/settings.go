@@ -175,6 +175,9 @@ func (a *App) showSettingsDialog() {
 			switch pk {
 			case model.ProviderGemini:
 				key = os.Getenv("GEMINI_API_KEY")
+				if key == "" {
+					key = os.Getenv("GOOGLE_API_KEY")
+				}
 			case model.ProviderOpenAI:
 				key = os.Getenv("OPENAI_API_KEY")
 			case model.ProviderGrok:

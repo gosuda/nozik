@@ -23,6 +23,17 @@ Nozik is a GTK dashboard AI agent that talks to the [Gozik](https://github.com/g
   - `nozik_gozik_installation` — locate the Gozik binary and gRPC address
 - **GTK dashboard** styled with Gozik's cosmic CSS and a color-inverted Nozik icon
 
+## Install
+
+Download the installer for your platform from [GitHub Releases](https://github.com/gosuda/nozik/releases/latest), then run it and choose a version. The installer downloads the matching application payload and installs Nozik for the current user.
+
+On Linux, a headless installation is also available:
+
+```bash
+chmod +x nozik-installer-linux-arm64
+./nozik-installer-linux-arm64 --headless --version latest
+```
+
 ## Build
 
 ```bash
@@ -52,7 +63,7 @@ Use the **Model** dropdown to choose a specific model; click **Refresh models** 
 
 | Provider | Settings field | Env fallback |
 |----------|----------------|--------------|
-| Gemini   | Gemini API key | `GEMINI_API_KEY` |
+| Gemini   | Gemini API key | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 | ChatGPT  | OpenAI API key | `OPENAI_API_KEY` |
 | Grok     | Grok API key   | `GROK_API_KEY` |
 | Kimi     | Kimi API key   | `KIMI_API_KEY` |

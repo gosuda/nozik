@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"syscall"
 	"time"
 
 	"github.com/gg582/nozik/internal/config"
@@ -117,9 +116,7 @@ func LaunchGozik(addr, binaryPath string) error {
 	attr := &os.ProcAttr{
 		Env:   cmdEnv,
 		Files: []*os.File{nil, logFile, logFile}, // stdin /dev/null, stdout+stderr -> log
-		Sys: &syscall.SysProcAttr{
-			Setsid: true, // new session & process group; independent of Nozik
-		},
+		Sys:   processAttributes(),
 	}
 
 	process, err := os.StartProcess(binaryPath, []string{gozikExeName()}, attr)

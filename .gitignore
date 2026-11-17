@@ -1,6 +1,8 @@
 # Build artifacts
 nozik
 build/
+build-appimage-*/
+dist/
 *.exe
 *.dll
 *.so

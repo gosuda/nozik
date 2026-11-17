@@ -20,11 +20,14 @@ type GeminiStrategy struct {
 	Client *http.Client
 }
 
-// NewGeminiStrategy creates a Gemini strategy. If apiKey is empty it falls back to GEMINI_API_KEY env var.
+// NewGeminiStrategy creates a Gemini strategy. If apiKey is empty it falls back to GEMINI_API_KEY or GOOGLE_API_KEY.
 // If model is empty it falls back to the default Gemini model.
 func NewGeminiStrategy(apiKey, model string) *GeminiStrategy {
 	if apiKey == "" {
 		apiKey = os.Getenv("GEMINI_API_KEY")
+	}
+	if apiKey == "" {
+		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}
 	if model == "" {
 		model = "gemini-2.0-flash"
@@ -40,7 +43,7 @@ func (g *GeminiStrategy) Name() string { return "Gemini" }
 
 func (g *GeminiStrategy) RecommendTracks(ctx context.Context, req RecommendationRequest) ([]model.Recommendation, error) {
 	if g.APIKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY not set")
+		return nil, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY not set")
 	}
 	prompt := BuildPrompt(req)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", g.Model, g.APIKey)
@@ -49,7 +52,7 @@ func (g *GeminiStrategy) RecommendTracks(ctx context.Context, req Recommendation
 			{"role": "user", "parts": []map[string]any{{"text": prompt}}},
 		},
 		"generationConfig": map[string]any{
-			"temperature": 0.7,
+			"temperature":      0.7,
 			"responseMimeType": "application/json",
 		},
 	}
@@ -93,7 +96,7 @@ func (g *GeminiStrategy) RecommendTracks(ctx context.Context, req Recommendation
 // ListModels returns the list of models available to the configured API key.
 func (g *GeminiStrategy) ListModels(ctx context.Context) ([]model.ModelInfo, error) {
 	if g.APIKey == "" {
-		return nil, fmt.Errorf("GEMINI_API_KEY not set")
+		return nil, fmt.Errorf("GEMINI_API_KEY or GOOGLE_API_KEY not set")
 	}
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models?key=%s", g.APIKey)
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
