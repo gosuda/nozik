@@ -28,7 +28,10 @@ jobs:
           go-version: '1.25.6'
       - name: Verify release Go cache isolation
         shell: bash
-        run: test -z "$(go env GOCACHEPROG)"
+        run: |
+          set -euo pipefail
+          cache_program=$(go env GOCACHEPROG)
+          test -z "$cache_program"
 
       - name: Install dependencies
         run: |
@@ -64,7 +67,10 @@ jobs:
           go-version: '1.25.6'
       - name: Verify release Go cache isolation
         shell: bash
-        run: test -z "$(go env GOCACHEPROG)"
+        run: |
+          set -euo pipefail
+          cache_program=$(go env GOCACHEPROG)
+          test -z "$cache_program"
 
       - name: Install cross dependencies
         run: |
@@ -124,7 +130,10 @@ jobs:
           go-version: '1.25.6'
       - name: Verify release Go cache isolation
         shell: bash
-        run: test -z "$(go env GOCACHEPROG)"
+        run: |
+          set -euo pipefail
+          cache_program=$(go env GOCACHEPROG)
+          test -z "$cache_program"
 
       - uses: msys2/setup-msys2@v2
         with:
@@ -173,7 +182,10 @@ jobs:
           go-version: '1.25.6'
       - name: Verify release Go cache isolation
         shell: bash
-        run: test -z "$(go env GOCACHEPROG)"
+        run: |
+          set -euo pipefail
+          cache_program=$(go env GOCACHEPROG)
+          test -z "$cache_program"
 
       - name: Install dependencies
         run: brew install gtk+3 pkg-config dylibbundler
@@ -260,7 +272,10 @@ jobs:
           go-version: '1.25.6'
       - name: Verify release Go cache isolation
         shell: bash
-        run: test -z "$(go env GOCACHEPROG)"
+        run: |
+          set -euo pipefail
+          cache_program=$(go env GOCACHEPROG)
+          test -z "$cache_program"
 
       - name: Build installers and uninstallers
         run: |
