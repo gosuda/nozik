@@ -15,7 +15,6 @@ cd "$INSTALLER_DIR"
 # Targets supported by the payload assets published on GitHub Releases.
 TARGETS=(
   "windows amd64 .exe"
-  "windows arm64 .exe"
   "darwin arm64 "
   "linux amd64 "
   "linux arm64 "
