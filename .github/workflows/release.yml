@@ -168,7 +168,7 @@ jobs:
           path: nozik-windows-${{ matrix.arch }}.exe
 
   build-macos:
-    runs-on: macos-latest
+    runs-on: depot-macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
