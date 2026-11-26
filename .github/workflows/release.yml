@@ -9,9 +9,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-linux-amd64:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -34,7 +38,7 @@ jobs:
           path: nozik-payload-linux-amd64.tar.gz
 
   build-linux-cross:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -84,14 +88,12 @@ jobs:
 
   build-windows:
     runs-on: ${{ matrix.runs-on }}
-    continue-on-error: ${{ matrix.allow_failure }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: amd64
-            allow_failure: false
-            runs-on: windows-latest
+            runs-on: depot-windows-2025
             msystem: MINGW64
             mingw-prefix: mingw64
             cc: gcc
@@ -100,17 +102,6 @@ jobs:
               mingw-w64-x86_64-gtk3
               mingw-w64-x86_64-pkg-config
               mingw-w64-x86_64-ntldd
-          - arch: arm64
-            allow_failure: true
-            runs-on: windows-11-arm
-            msystem: CLANGARM64
-            mingw-prefix: clangarm64
-            cc: clang
-            packages: >-
-              mingw-w64-clang-aarch64-toolchain
-              mingw-w64-clang-aarch64-gtk3
-              mingw-w64-clang-aarch64-pkg-config
-              mingw-w64-clang-aarch64-ntldd
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -120,23 +111,9 @@ jobs:
         with:
           msystem: ${{ matrix.msystem }}
           update: true
-          cache: false
+          cache: true
           path-type: inherit
           install: ${{ matrix.packages }}
-      - name: Patch gotk3 for Windows ARM64
-        if: matrix.arch == 'arm64'
-        shell: msys2 {0}
-        run: |
-          go mod download github.com/gotk3/gotk3
-          GOTK3_VERSION=$(grep 'github.com/gotk3/gotk3' go.mod | awk '{print $2}')
-          GOMODCACHE=$(cygpath -u "$(go env GOMODCACHE)")
-          GOTK3_DIR="${GOMODCACHE}/github.com/gotk3/gotk3@${GOTK3_VERSION}"
-          if [ -d "$GOTK3_DIR" ]; then
-            find "$GOTK3_DIR" -name '*.go.h' -print0 | xargs -0 sed -i \
-              -e 's/^extern void /extern __declspec(dllexport) void /' \
-              -e 's/^extern gboolean /extern __declspec(dllexport) gboolean /' \
-              -e 's/^extern gint /extern __declspec(dllexport) gint /'
-          fi
       - name: Build nozik
         shell: msys2 {0}
         run: |
@@ -250,7 +227,7 @@ jobs:
           path: nozik-payload-macos-arm64.tar.gz
 
   build-installers:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -266,7 +243,7 @@ jobs:
           path: installer/dist/nozik-*
 
   release:
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-24.04
     needs: [build-linux-amd64, build-linux-cross, build-windows, build-macos, build-installers]
     steps:
       - uses: actions/download-artifact@v4
@@ -280,4 +257,4 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: artifacts/*
           generate_release_notes: true
-          overwrite: true
+          overwrite_files: true

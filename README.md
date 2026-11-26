@@ -27,6 +27,8 @@ Nozik is a GTK dashboard AI agent that talks to the [Gozik](https://github.com/g
 
 Download the installer for your platform from [GitHub Releases](https://github.com/gosuda/nozik/releases/latest), then run it and choose a version. The installer downloads the matching application payload and installs Nozik for the current user.
 
+Release payloads and installers cover Linux AMD64, ARM64, and RISC-V 64, macOS ARM64, and Windows AMD64. The optional Windows ARM64 GTK payload is not built: its native MSYS2 tools require a Windows ARM64 runner, which Depot does not provide.
+
 On Linux, a headless installation is also available:
 
 ```bash
